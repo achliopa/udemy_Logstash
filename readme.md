@@ -213,3 +213,78 @@ output {
 ### Lecture 9 - Filtering Events
 
 *  [all mutate options](https://www.elastic.co/guide/en/logstash/current/plugins-filters-mutate.html)
+* filters is the second step in the pipeline. they process events before handling them over to the pipeline. 
+* we will see the mutate filter and use it to convert datatype to the amount string -> int.
+* to sse it in action we sent a JSON file with  the order as string in postman. it is passed to the output as string
+```
+"@timestamp" => 2018-05-12T18:38:53.358Z,
+         "order" => "2346",
+          "host" => "127.0.0.1",
+        "amount" => 3400.89,
+      "@version" => "1"
+}
+```
+* we use the mutate filter in our pipeline config file to convert the order field to an integer. the syntax is 
+```
+filter {
+	mutate {
+		convert => { "order" => "integer" }
+	}
+}
+```
+* we resend the request ro postma with order as string and we see it in output as integer. but both in file and in terminal it is in the end of the event object alone (processing delay?>)
+* the mutate makes sense if e.g we send the events to elasticsearch so they must match mappings
+* logstash is optimistic on the data it receives. so if ewe semd a string literal the integer it convert to will be 0
+* mutation conver show not be used as validation but as conversion and protection against erroneous systems
+
+### Lecture 10 - Common Filter Options
+
+* logstash offers nummerous mutate options and numberous filter plugins. 
+* also it offers common filter options which are generic and not specific to a certain plugin
+* *add_filed* option adds one or more fields to the event
+* *remove_field* removes one or more fields from the event
+* *add_tag* adds one or more tags to the event
+* *remove_tag* removes one or more tags from the event
+* its useful to tag events and perform conditional processing depending on what tags they contain
+* we will showcase common fitler options by removing the generated host firld from the event
+```
+filter {
+	mutate {
+		convert => { "order" => "integer" }
+		remove_field => ["host"]
+	}
+}
+```
+* we see that host field is missing from the output
+
+### Lecture 11 - Understanding the Logstash execution model
+
+* we have a number of inputs listenign for events, each input runs in its own thread to avoid blocking each other, if we have 2 events at the same time, they will be handled concurently
+* inputs can apply codecs
+* each input sends the event to a work queue
+* from the work queue loggstash uses pipeline workers to do the rest of the work
+* each worker includes filters outputs and any output codecs.
+* each pipeline worker runs in its own thread (multiple events can be processed simultatneously)
+* a pipeline worker consumes a range of events from the queue (batches)
+* this is a way to optimize event processing to maximize the throughput of the pipeline
+* the batch size is configured with 2 options. the maximum batch size and batch delay
+* batch delay is the time to wait before processing an undersized batch of events. say we set max size to 50 and delay to 100ms. then a batch will be processed if the size is 50 or if 100ms has passed
+* some pipelines output batches of events (using output plugins e.g elasticsearch output plugin) to make us of the bulk api exposed by elastic search so the whole pipeline is multievent start to finish
+* the amount of threads started by logstash is determined t startup by evaluating the available hardware on the machine (cpu cores)
+* it is possible to configure a fixed number of workers
+* logstash uses queues within each pipeline worker (e.g between filters and outputs) this is the buffer of events completeing one stage and waiting for the other. these are in-memory queues. 
+* if logstash crashes. events in these queues will be lost
+* we can configure pipeline to use disk space for the queues. we scarifice performance bu t data are not lost in such event
+
+## Section 3 - Project Apache
+
+### Lecture 13 - Introduction to the section
+
+* in this section we will build a project to handle logs from the apache server
+* we will begin with access logs, read them from files and parse them in  a way that useful fields will be extracted, 
+* we will send the processed events to elastic search and use kibana to visualize the data
+* we will handle error logs also
+
+### Lecture 14 - Automatic config reload & file input
+
+* 
