@@ -287,4 +287,262 @@ filter {
 
 ### Lecture 14 - Automatic config reload & file input
 
-* 
+* we start by building a simple pipeline configuration 
+* we will use a testfile with a handful of http requests
+* in our project dir we create a folder event-data with a testfile named apache-access.log
+* we also create a pipelines folder with a pipeline.conf file impelemnting a simple pipeline
+```
+input {
+	stdin {}
+}
+
+output {
+	stdout {
+		codec => rubydebug
+	}
+}
+```
+* this is more of a pipeline boilerplate tht listens for events in command line and outputs the m in terminal
+* we want to enable auto reload of our config file so that we dont have to restart logstash every time we change it. we use the `--config.reload.automatic` option when running logstash
+* we start logstash using the script and the autoreload option `/logstash-6.2.4/bin/logstash -f pipelines/pipeline.conf --config.reload.automatic`
+* our pipeline is simple and useless. we mod it to read from the test file
+```
+  file {
+    path => "/home/achliopa/workspace/udemy/logstash/myfolder/project/event-data/apache_access.log"
+  }
+```
+* Autoreload does not work because we were using the stdin plugin. autoreload config has issues with stdin. so we restart logstash
+* no events are processed from teh file. this is because the file plugin processes new lines added ot he file not the existing ones
+* we can change that by adding a config option `start_position => "beginning"` to start processing from the beginning of the file. 
+* this happens only the first time because logstash to save memory keeps track of the lines it has processes and does not process them again
+* logstash saves status in a sinceDB file in /logstash/data/plugins/inputs/file
+* it keeps one such file per input file.
+* the last number in this file is the byte offset. so that logstash knows how many bytes of the file have been processed. the file is persisten among logstash restarts. we delete it to process form start
+* we restart logstash and our file is indeed processes and a stream, of events outputed to console
+```
+    "@timestamp" => 2018-05-12T21:28:22.427Z,
+          "path" => "/home/achliopa/workspace/udemy/logstash/myfolder/project/event-data/apache_access.log",
+          "host" => "achliopa-ThinkPad-T530",
+       "message" => "78.133.44.127 - - [20/Sep/2017:18:42:01 +0200] \"GET /css/admin.css\" 200 12964 \"https://codingexplained.com/admin/products\" \"Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/60.0.3112.90 Safari/537.36\"",
+      "@version" => "1"
+}
+```
+* we add a line to the file to see that is gets processed. we save and indeed its processed as an event
+* instead of modifying our test log file we will add http input in the pipeline to test it with http requests
+* to add comments in config files use hash # in front of the line
+```
+# file {
+#   path => "/home/achliopa/workspace/udemy/logstash/myfolder/project/event-data/apache_access.log"
+#   start_position => "beginning"
+# }
+
+  http {
+
+  }
+}
+```
+* autoreload takes action and our pipeline is reconfigured. autoreload checks every 3 seconds for changes, we can set that as an option
+* what happens when we reload.
+  * logstash periodically reads the pipeline config file from disk (every 3secs by default)
+  * it checks if the contents have changed compared to the currently used configuration. 
+  * if its the same it sleeps
+  * if it has changed it verifys the new pipeline configuration, if invalid it sleeps
+  * if it is valid. it stops existing pipeline
+  * lastly it starts the new pipeline
+* we test the new config with an http req of raw text body to localhost:8080 (PUT)
+* it works our whole bocy message is processes as a string
+```
+{
+    "@timestamp" => 2018-05-12T21:41:42.885Z,
+          "host" => "0:0:0:0:0:0:0:1",
+       "message" => "173.163.21.50 - - [20/Sep/2017:19:01:42 +0200] \"GET /products/view/124\" 404 4160 \"-\" \"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/59.0.3071.115 Safari/537.36\"",
+      "@version" => "1",
+       "headers" => {
+              "content_length" => "208",
+                "request_path" => "/",
+
+```
+
+### Lecture 15 - Parsing Requests with Grok
+
+* [grok patterns](https://github.com/logstash-plugins/logstash-patterns-core)
+* [grok filter plugin documentation](https://www.elastic.co/guide/en/logstash/current/plugins-filters-grok.html)
+* now that are processing the access log events, we need to parse them to usful info extracting their fiedls with useful info.
+* we will use the grok filter plugin which is used to make sense of unstructured data
+* this is done by configuring text patterns with regex. we can add our one regex but grok included a lot of ready made
+* there is a github repo with all the available grok patterns. in patterns dir
+* [grok-patterns](https://github.com/logstash-plugins/logstash-patterns-core/blob/master/patterns/grok-patterns) file contains general purpose patterns (regex) for datatypes
+* we can use these patterns identifiers in the plugin and not mess with regex
+* the syntax of adding patterns to grok is %{SYNTAX:SEMANTIC}. syntax is the regex or patterns identifier
+* semantic  is a semantic name for the data extracted with the syntax. like a field name
+* suppose we have a string of text "John Dow john@dow.com 32" containg info about a person. if we want to parse this unstructured text to STRUCTURED fields we can use %{WORD:firs_name} %{WORD:last_name} %{EMAILADDRESS:email} %{INT:age:int}
+* note that for numbers we add a second trasformation after SEMANTIC. this is becouse parsing produces strings and we want the value to be an integer
+* we add a grok filter to our pipeline
+```
+filter {
+  grok {
+    match => { "message" => "%{IP:ip_address} %{USER:identity} %{USER:auth} \[%{HTTPDATE:req_ts}\] \"%{WORD:http_verb} %{URIPATHPARAM:req_path}\" %{INT:http_status:int} %{INT:num_bytes:int}" }
+  }
+}
+```
+* tyhis filter will be a grok match filter on the "message" field of the event (the body). `173.163.21.50 - - [20/Sep/2017:19:01:42 +0200] "GET /products/view/124" 404 4160 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/59.0.3071.115 Safari/537.36"`
+* we see that it aplies SYNTAX:SEMANTIC pairs on one by one the areas of the string wrapping the match patterns on characters that we want excluded. we use specialized syntax patterns from the large list avaialble
+* we sent an http req to localhost:8080 from postman and see the fields extracted
+```
+...
+           "host" => "0:0:0:0:0:0:0:1",
+     "ip_address" => "173.163.21.50",
+       "@version" => "1",
+           "auth" => "-",
+     "@timestamp" => 2018-05-13T15:12:58.666Z,
+      "http_verb" => "GET",
+      "num_bytes" => 4160,
+    "http_status" => 404,
+
+          "req_ts" => "20/Sep/2017:19:01:42 +0200",
+       "req_path" => "/products/view/124"
+
+```
+
+### Lecture 16 - Finishing the Grok Pattern
+
+* In [patterns](https://github.com/logstash-plugins/logstash-patterns-core/tree/master/patterns) there are ready made grok match patterns to extract info from common logs like httpd logs. we will use the *HTTPD_COMBINEDLOG*
+* the way to use it is simple. we replace our match pattern with `match => { "message" => "%{HTTPD_COMBINEDLOG}"}`. we test it and it works. fields are extracted
+* we see aproblem agent and referrer fileds start and end with a ". we see the definition of the pattern in github and see that both these patterns do not use quotation marks around them to exclutde them. but use instead the QS sysntax. this means that quotation marks are captured by the patterns
+* to remove them we add the mutate filter plugin after grok in the pipeline
+```
+  mutate {
+    gsub => [
+      "agent", '"', "",
+      "referrer", '"', ""
+    ]
+  }
+```
+* this plugin takes an array of the fields it will operate on. we spec the char we want to transform "\"" a quotation mark and replace it with empty string "".
+* the order of plugins is important. also the fields are the product of the first grok plugin
+* we test it and it works. quotation marks are removed
+* there is another approach to solving this problem. we delete the mutate plugin and dont use the pattern just by its name in grok but by its representation whi we will modify `%{HTTPD_COMMONLOG} %{QS:referrer} %{QS:agent}`
+* instead of using the QS pattern we use GREEDYDATA. greedydata matches anything inside of quotation marks. result is ok!
+* we still got a problem integer values are strings . we cannot solve it without digging deeper in the HTTPD_COMMONLOG pattenr. so we will solve it with mutate
+```
+  mutate {
+    convert => {
+      "response" => "integer"
+      "bytes" => "integer"
+    }
+  }
+```
+
+### Lecture 17 - Accessing Field Values
+
+* we will learn how to reference field values. this is useful on applying conditional statements
+* we can refernce a filend name of an event with its name e.g *request* or the anme in square brackets *[request]*. we can reference nested fields by cascading field names in square brackets e.g `[headers][req_path]`
+* we will use field refernence to create aoutput event log from the pipeline with a made up name relevant to the pipeline input log type.
+* we add a field in our pipe line from input, its named type and we add it on both input plugins
+```
+  http {
+    type => "access"
+  }
+```
+* this field is static and passes from the pipeline down to the output
+* we will use it to make a dynamic name of our output file. the way to interpolate field names in strings is `%{fieldname}`
+```
+  file {
+    path => "%{type}_temp.log"
+  }
+```
+* we test by sending a postman req. we see the new field beeing added to the event and our filename corectly created and our file poppulated
+
+### Lecture 18 - Formatting Dates
+
+* [joda date format](http://joda-time.sourceforge.net/apidocs/org/joda/time/format/DateTimeFormat.html)
+* we will learn how to format dates because we want date to be part of our filename. the way to interpolate date in a string is `%{+DATE_FORMAT}`. the date format must be a joda date format e.g `%{+yyyy-MM-dd}`
+* we modify our output file plugin to include the date in its name 
+```
+  file {
+    path => "%{type}_%{+yyyy-MM-dd}.log"
+  }
+```
+* but what date is passed in the name? the events date. so it sends a request to the pipeline to check if the event has a timstamp field. so the result is to have a file per each date of the events. the event timestamp has nothing to do with any date contained in the input data rather than the timestamp the event was processed in logstash
+* we can use this technique to pass dates on the index field that will be used by elasticsearch when indexing docs 
+
+###  Lecture 19 - Setting the time of the event
+
+* an event contains a timestamp of when logstash received the event / when the input received the event.
+* in some use cases we dont want that. we would like the event o carry a timestamp of when the event was created in the original system. e.g the apache server timestamp. (e.g as it appears in the lod file we input)
+*  this is good for backtracking or when processing results on differenceies in timestamps
+* the way to do it is by adding another filter plugin called date
+```
+  date {
+    match => ["timestamp", "dd/MMM/yyyy:HH:mm:ss Z"]
+  }
+```
+* what this plugin does is that it uses one of the fields that were generated by GROk or by other input named *timestamp* as source of the *@timestamp* event property by applying a JODA date format (the JODA format should express the way date is formated in the input field).  the result is that timestamp and @timestamp are the same and this is reflected in the output file name
+```
+     "timestamp" => "20/Sep/2017:18:42:01 +0200",
+          "type" => "access",
+       "request" => "/js/admin.js",
+    "@timestamp" => 2017-09-20T16:42:01.000Z,
+```
+* if the parse fails the logstash will pass as timestamp value ~dateparsefailure
+* with both timestamps the same we can remove the GROK generated timestamp ( we have to do it in the date plugin, after the copy)
+```
+  date {
+    match => ["timestamp", "dd/MMM/yyyy:HH:mm:ss Z"]
+    remove_field => ["timestamp"]
+  }
+```
+
+### Lecture 20 - Introduction to conditional statements
+
+* conditional statements in logstash follow conventional syntax.
+```
+if EXPR {
+  
+} else if EXPR {
+  
+} else {
+  
+}
+```
+* expressions should be valid logstah syntax e.g `[type] == "access"`
+* operators supported:
+  * equality: ==, !=, <, >, <=, >= e.g `if [headers][content_length] >= 1000 {}`
+  * regexp: =~, !~ e.g `[some_field] =~ /[0-9]+/ { # some_filed only contains digits }`
+  * inclusion: in,not in e.g `if [some_field] in ["one","two"."three"] {}`
+  * boolean: and, or 
+  * unary: !   !([a] == [b]) equivalent to [a] != [b]
+
+### Lecture 21 - Working with conditional statements
+
+* [glob pattern](https://www.elastic.co/guide/en/logstash/current/glob-support.html)
+* we will prepare the pipeline to handle both acces and error logs
+* we will set type to access or error depending the type of event we are procesing
+* conditional statements can be introduced only at the root leve of the three stages of the pipeline
+* we remove the type from both input file plugin and http plugin
+* we add condtional statemnt in the filter part to determin if the request uri contains the field error
+```
+  if ([headers][request_uri] =~ "error") {
+    mutate {
+      replace => { type => "error"}
+    }
+  } else {
+    mutate {
+      replace => { type => "access"}
+    }
+  }
+```
+* we move the grok parsing th emutate and date plugin we used for access logs in the else statement 
+* we send an http req and see type access is added
+* we append error to the URI path and see type set to error
+* we want to be able to input files from a dir
+* we start by replacing the file name adding a widcard `path => "/home/achliopa/workspace/udemy/logstash/myfolder/project/event-data/apache_*.log"`
+* we can use glob patterns for file and directory patterns e.g `/path/to/*.log` `/path/to/**/*.log` `/path/to/{nginx,apache}/*.log`
+* when we input from file, the path of the file is registered as event field so we can apply conditional logic to it `i f [path] =~ "errors" `
+* if the grok pattern does not match we get "_grokparsefailure" in tags field. we use it to the conditiona statemtns to handle the case of error in grok parsing
+```
+    if "_grokparsefailure" in [tags] {
+      drop { }
+    }
+```
+* what we do is drop the event so it dont appear in output
