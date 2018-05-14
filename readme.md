@@ -546,3 +546,15 @@ if EXPR {
     }
 ```
 * what we do is drop the event so it dont appear in output
+
+### Lecture 22 - Geographical Data Enrichment
+
+* an example of geographical data enrichment is to take an ip and resolve the ips country city etc.
+* doing this is easy thanks to the geoip filter plugin
+* this plugin ships with a db called geolite2 shipped by a company called maxmind. it possible to configure it to use other db to improve accuracy
+* we add the geoip plugin at the bootm of the filters plugins
+```
+    geoip {
+      source => "clientip"
+    }
+```
